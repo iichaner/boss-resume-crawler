@@ -235,13 +235,17 @@ if ready_state != 'complete':
 })()
 ```
 
-### 关闭详情页
+### 关闭详情页（必须）
+
+**提取完成后立即关闭 tab，不关闭会导致 tab 堆积，占用 CDP 连接资源。**
 
 ```python
 subprocess.run(['curl', '-s', f'http://localhost:9222/json/close/{page_id}'],
               capture_output=True, timeout=5)
-time.sleep(1)
+time.sleep(1)  # 等待 tab 完全关闭
 ```
+
+> 新脚本 `boss_extract_cdp.py` 在 `finally` 块中确保关闭，即使提取失败也会关闭。
 
 ### 数据校验
 
@@ -291,9 +295,14 @@ with open(output_file, 'a', newline='', encoding='utf-8-sig') as f:
 
 **⚠️ 禁止使用 `'w'` 模式！必须用 `'a'` 追加模式。**
 
-### 批次缓存
+### 即时写入（新策略）
 
-每处理 10 个职位保存一次到 `temp/jobs_batch_{n}.csv`，防止中途出错丢失数据。
+**每提取 1 条立即追加写入主 CSV 文件**，不再使用批次缓存。
+
+优势：
+- 进程中断最多丢失 1 条数据（当前正在提取的那条）
+- 无需手动合并批次文件
+- 实时可见爬取进度（CSV 行数 = 已完成条数）
 
 ---
 
