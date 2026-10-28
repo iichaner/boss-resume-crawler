@@ -23,7 +23,41 @@ import argparse
 from datetime import datetime
 
 # T6: 导入进度追踪器
-sys.path.insert(0, os.path.expanduser('~/.agents/skills/boss-pipeline/scripts'))
+def _pipeline_scripts_dir():
+    """定位 boss-pipeline/scripts（BOSS_PIPELINE_SKILLS_ROOT > 同级兄弟目录）。
+
+    不写死任何家目录路径：四个 skill 装在一起即可自动找到，换安装位置也不用改代码。
+    """
+    cands = []
+    env = os.environ.get('BOSS_PIPELINE_SKILLS_ROOT')
+    if env:
+        cands.append(os.path.join(os.path.expanduser(env), 'boss-pipeline', 'scripts'))
+    here = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        cands.append(os.path.join(here, 'boss-pipeline', 'scripts'))
+        parent = os.path.dirname(here)
+        if parent == here:
+            break
+        here = parent
+    for c in cands:
+        if os.path.isfile(os.path.join(c, 'config_paths.py')):
+            return c
+    return None
+
+
+def _ensure_pipeline_path():
+    """把 boss-pipeline/scripts 加入 sys.path（幂等）。返回目录或 None。"""
+    d = _pipeline_scripts_dir()
+    if d and d not in sys.path:
+        sys.path.insert(0, d)
+    return d
+
+
+if _ensure_pipeline_path() is None:
+    print("❌ 找不到 boss-pipeline/scripts：请把四个 skill 装在同一个目录下，"
+          "或设置 BOSS_PIPELINE_SKILLS_ROOT 为该目录")
+    exit(1)
+
 from progress_tracker import ProgressTracker
 
 try:
@@ -700,7 +734,7 @@ def main():
     # T6: 自动启动 Dashboard 监控页面
     dashboard_port = 8765
     try:
-        sys.path.insert(0, os.path.expanduser('~/.agents/skills/boss-pipeline/scripts'))
+        _ensure_pipeline_path()
         from serve_dashboard import start_dashboard_server
         dashboard_url = start_dashboard_server(output_dir, port=dashboard_port, background=True)
         print(f"🌐 Dashboard: {dashboard_url}")
