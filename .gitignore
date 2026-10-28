@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 本地备份/运行时产物
+*.bak
+*.bak-*
+*.log
+*.csv

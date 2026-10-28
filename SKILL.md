@@ -124,14 +124,77 @@ fi
 **未登录时的处理：**
 1. 暂停所有爬取工作
 2. 提示用户：「页面显示未登录，请在浏览器中扫码登录，完成后告知我」
-3. 等待用户明确说「已登录」或「继续」后，再执行后续 Phase
+3. 等待用户明确说「已登录」或「继续」
+4. **⚠️ 登录后必须重新导航到目标列表页 URL**（登录完成后 Boss 直聘会自动跳转到 `https://www.zhipin.com/web/geek/jobs` 通用页，不是你的搜索页）
+5. 使用 CDP 导航到目标 URL 后，再执行后续 Phase
+
+**登录后重新导航（必须）：**
+
+```python
+import websocket, json, time, urllib.request
+
+# 获取当前页面
+pages = json.loads(urllib.request.urlopen('http://localhost:9222/json').read())
+target_page = None
+for p in pages:
+    if p.get('type') == 'page' and 'zhipin' in p.get('url', ''):
+        target_page = p
+        break
+
+if target_page:
+    ws = websocket.create_connection(target_page['webSocketDebuggerUrl'], timeout=10)
+    # 导航到目标搜索 URL
+    ws.send(json.dumps({
+        'id': 1,
+        'method': 'Page.navigate',
+        'params': {'url': '<你的目标列表页URL>'}
+    }))
+    ws.recv()
+    ws.close()
+    time.sleep(3)  # 等待页面加载
+    print(f'✅ 已导航到目标页面')
+```
+
+或使用命令行：
+```bash
+# 通过 CDP 导航
+curl -s http://localhost:9222/json | python3 -c "
+import json,sys,urllib.request
+pages = json.load(sys.stdin)
+for p in pages:
+    if 'zhipin' in p.get('url',''):
+        page_id = p['id']
+        break
+urllib.request.urlopen(f'http://localhost:9222/json/close/{page_id}')
+" 
+# 关闭后用脚本重新打开目标 URL
+```
 
 ---
 
 ## 执行流程
 
+### Phase 0：创建工作目录（必须首先执行）
+
+**在执行任何爬取操作之前，第一件事：在项目路径下创建以日期命名的工作文件夹。**
+
+```bash
+# 获取今天日期
+TODAY=$(date +%Y-%m-%d)
+
+# 创建工作目录（Obsidian Vault 项目路径）
+PROJECT_DIR="/Users/ii/Obsidian Vault/7_Project/${TODAY}-boss直聘JD抓取"
+mkdir -p "${PROJECT_DIR}"
+```
+
+**规则：**
+- 工作目录命名格式：`YYYY-MM-DD-boss直聘JD抓取`
+- 路径固定在 `/Users/ii/Obsidian Vault/7_Project/` 下
+- 所有后续产出（CSV、错误日志、临时文件）全部放入此目录
+- **禁止使用 `/tmp/` 或其他临时路径**
+
 ### Phase 1：列表页滚动加载
-使用 CDP `Input.dispatchMouseEvent mouseWheel` 模拟真实鼠标滚轮（agent-browser scroll 无效）。最多 100 次滚动，随机等待 1.5-3.5 秒，连续 3 次数量不变则停止。启动浏览器需添加 `"--remote-allow-origins=*"` 参数。
+使用 CDP `Input.dispatchMouseEvent mouseWheel` 模拟真实鼠标滚轮（agent-browser scroll 无效）。最多 **200** 次滚动，随机等待 1.5-3.5 秒，**连续 5 次数量不变 + 至少 3 次确认已到页面底部**才停止。启动浏览器需添加 `"--remote-allow-origins=*"` 参数。
 详见 [references/sop.md](references/sop.md) SOP-1。
 
 ### Phase 2：职位列表提取
@@ -166,8 +229,10 @@ CDP 开新 tab → **等待 20 秒 + 随机波动（0-3 秒）** → 检查 `rea
 
 ## 输出规范
 
-- CSV 路径：`<工作目录>/jobs_data_{YYYYMMDD}_{HHMM}.csv`
-- 错误日志：同目录下 `temp/error_log.csv`
+- **工作目录**：`/Users/ii/Obsidian Vault/7_Project/YYYY-MM-DD-boss直聘JD抓取/`（独立使用时默认）
+  - **boss-pipeline 场景**：输出目录改为统一根目录下的 `01_raw/`（即 `workspace/boss直聘一体化/YYYY-MM-DD-搜索词/01_raw/`），通过 `--output` 参数传入，脚本本身无需改动
+- CSV 路径：`<输出目录>/jobs_data_{YYYYMMDD}_{HHMM}.csv`
+- 错误日志：`<输出目录>/temp/error_log.csv`
 - 质量报告格式：
   - 本次新增：N 条
   - 去重跳过：N 条
@@ -207,11 +272,11 @@ CDP 开新 tab → **等待 20 秒 + 随机波动（0-3 秒）** → 检查 `rea
 
 **默认脚本参数：**
 ```bash
-# 指定输出目录（默认当前目录）
-python3 scripts/boss_extract_cdp.py --output ~/Desktop/jobs
+# 指定输出目录（必须是 Phase 0 创建的工作目录）
+python3 scripts/boss_extract_cdp.py --output "/Users/ii/Obsidian Vault/7_Project/2026-07-06-boss直聘JD抓取"
 
-# 限制滚动次数（默认100）
-python3 scripts/boss_extract_cdp.py --max-scroll 30
+# 限制滚动次数（默认200，建议保持 200 以确保充分滚动）
+python3 scripts/boss_extract_cdp.py --max-scroll 200
 
 # 限制爬取条数（默认全部）
 python3 scripts/boss_extract_cdp.py --max-jobs 10
@@ -220,7 +285,7 @@ python3 scripts/boss_extract_cdp.py --max-jobs 10
 python3 scripts/boss_extract_cdp.py --base-wait 25
 
 # 组合使用
-python3 scripts/boss_extract_cdp.py --output ~/Desktop/jobs --max-scroll 50 --max-jobs 20
+python3 scripts/boss_extract_cdp.py --output "/Users/ii/Obsidian Vault/7_Project/2026-07-06-boss直聘JD抓取" --max-scroll 200
 ```
 
 **脚本设计原则（反爬）：**

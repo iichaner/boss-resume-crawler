@@ -1,6 +1,27 @@
 # 详细 SOP
 
-## SOP-0：登录状态检查
+## SOP-0：创建工作目录
+
+> **必须首先执行。** 所有爬取产出统一存入项目工作目录。
+
+### 执行步骤
+
+```bash
+TODAY=$(date +%Y-%m-%d)
+PROJECT_DIR="/Users/ii/Obsidian Vault/7_Project/${TODAY}-boss直聘JD抓取"
+mkdir -p "${PROJECT_DIR}"
+```
+
+### 规则
+
+- 命名格式：`YYYY-MM-DD-boss直聘JD抓取`
+- 路径固定：`/Users/ii/Obsidian Vault/7_Project/`
+- 所有 CSV、错误日志、临时文件全部放入此目录
+- **禁止使用 `/tmp/` 或其他临时路径**
+
+---
+
+## SOP-1：登录状态检查
 
 > 用于所有 Phase 之前。BOSS 直聘未登录时只能看到有限职位，且无法获取完整数据。
 
@@ -28,7 +49,7 @@ username=$(echo "$snapshot" | grep -oE 'link "[^"]+"' | head -20 | grep -vE "首
 | 状态 | 特征 | 处理 |
 |------|------|------|
 | ❌ 未登录 | snapshot 中出现「登录/注册」「立即登录」「我要找工作」 | 暂停，等待用户登录 |
-| ✅ 已登录 | snapshot 中出现用户名（如「陈新彦」）或「简历」「消息」链接 | 继续执行 |
+| ✅ 已登录 | snapshot 中出现用户名（如「张三」）或「简历」「消息」链接 | 继续执行 |
 
 ### 注意事项
 
@@ -110,25 +131,43 @@ ws.recv()
 ws.close()
 time.sleep(1)
 
-# 滚动加载
+# 滚动加载（最多 200 次，连续 5 次数量不变 + 确认到底部才停止）
 prev_count = 0
 same_count = 0
+at_bottom_count = 0
 
-for i in range(100):  # 最多滚动100次
+for i in range(200):  # 最多滚动200次
     cdp_scroll(ws_url, 800)
     time.sleep(1.5 + (i % 3) * 0.5)  # 随机等待1.5-3秒
     
-    if (i + 1) % 5 == 0:
-        count = count_jobs(ws_url)
-        print(f"第 {i+1} 次滚动: {count} 条职位")
+    if (i + 1) % 3 == 0:  # 每3次检测一次（更频繁）
+        check_js = """
+        (function(){
+            var cards = document.querySelectorAll('.job-card-wrap').length;
+            var scrollH = document.documentElement.scrollHeight;
+            var clientH = document.documentElement.clientHeight;
+            var scrollT = window.pageYOffset || document.documentElement.scrollTop;
+            var atBottom = (scrollT + clientH) >= (scrollH - 200);
+            return JSON.stringify({count: cards, atBottom: atBottom});
+        })()
+        """
+        result = cdp_execute(ws_url, check_js)
+        info = json.loads(result) if result else {}
+        count = info.get('count', 0)
+        at_bottom = info.get('atBottom', False)
+        
+        print(f"第 {i+1} 次滚动: {count} 条职位 | 到底: {at_bottom}")
         
         if count == prev_count:
             same_count += 1
-            if same_count >= 3:
-                print("连续3次数量不变，停止")
+            if at_bottom:
+                at_bottom_count += 1
+            if same_count >= 5 and at_bottom_count >= 3:
+                print("连续5次数量不变且已到底部，停止")
                 break
         else:
             same_count = 0
+            at_bottom_count = 0
         prev_count = count
 ```
 
@@ -158,7 +197,8 @@ curl -s http://localhost:9222/json | python3 -c "import json,sys; pages=json.loa
 
 ### 上限检测
 
-- 连续 3 次滚动后数量不变 → 判定到达上限
+- **连续 5 次滚动后数量不变 + 至少 3 次确认已到页面底部** → 判定到达上限
+- 页面底部判断：`scrollTop + clientHeight >= scrollHeight - 200`
 - 记录最后一条职位（公司名 + 岗位名），供用户人工校验
 
 ### 测试结果
@@ -170,6 +210,7 @@ curl -s http://localhost:9222/json | python3 -c "import json,sys; pages=json.loa
 | 20 | 405 |
 | 30 | 540 |
 | 50 | 810 |
+| 100+ | ~1000+ |
 
 ---
 
